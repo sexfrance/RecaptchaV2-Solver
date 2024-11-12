@@ -1,0 +1,7 @@
+aiohttp==3.10.10
+logmagix==2.0.3
+patchright
+pydub==0.25.1
+quart==0.19.8
+Requests==2.32.3
+SpeechRecognition==3.10.4
