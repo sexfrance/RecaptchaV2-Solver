@@ -359,7 +359,7 @@ class CaptchaSolverPool:
 
         for task, future in futures:
             try:
-                token = future.result(timeout=120)  # 2 minute timeout per task
+                token = future.result(timeout=120)
                 results.append((task, token, None))
             except Exception as e:
                 results.append((task, None, str(e)))

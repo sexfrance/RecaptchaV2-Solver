@@ -5,8 +5,6 @@ from sync_solver import ReCaptchaSolver, CaptchaSolverPool
 from async_solver import AsyncReCaptchaSolver, AsyncCaptchaSolverPool
 from api_solver import app as api_app
 
-
-
 class ReCaptchaTester:
     def __init__(self):
         self.log = Logger()
