@@ -378,8 +378,8 @@ if __name__ == "__main__":
                 site_key="6LcG5v8SAAAAAOdAn2iqMEQTdVyX8t0w9T3cpdN2",
                 proxy = {
                     "server": "http://p.webshare.io:80",
-                    "username": "axjtumpn-rotate",
-                    "password": "p1lr6n0x3q44"
+                    "username": "username",
+                    "password": "password"
                 }
             )
             print(token)
