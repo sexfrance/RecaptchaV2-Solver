@@ -23,6 +23,8 @@ A Python-based solution for solving Google's reCAPTCHA v2 challenges efficiently
 - Install the requirements: `pip install -r requirements.txt`
 - Install chrominium: `patchright install chromium` / `python -m patchright install chromium`
 
+---
+
 ### 🔥 Features
 
 - **Multiple Operation Modes**: Supports synchronous, asynchronous, and API-based solving
@@ -34,6 +36,8 @@ A Python-based solution for solving Google's reCAPTCHA v2 challenges efficiently
 - **Enterprise Support**: Handles both standard and enterprise reCAPTCHA
 - **Token Retrieval**: Multiple methods for reliable token extraction
 - **Error Handling**: Robust error handling with detailed feedback
+
+---
 
 ### 📝 Usage
 
@@ -86,14 +90,20 @@ proxy={
 print(token)
 ```
 
+---
+
 ### 📹 Preview
 
 ![Preview](https://i.imgur.com/fHZwjNl.gif)
+
+---
 
 ### ❗ Disclaimers
 
 - I am not responsible for anything that may happen, such as API Blocking, IP ban, etc.
 - This was a quick project that was made for fun and personal use if you want to see further updates, star the repo & create an "issue" [here](https://github.com/sexfrance/RecaptchaV2-Solver/issues/)
+
+---
 
 ### 📜 ChangeLog
 
@@ -101,6 +111,8 @@ print(token)
 v0.0.1 ⋮ 11/12/2024
 ! Initial release
 ```
+
+---
 
 <p align="center">
   <img src="https://img.shields.io/github/license/sexfrance/RecaptchaV2-Solver.svg?style=for-the-badge&labelColor=black&color=f429ff&logo=IOTA"/>
