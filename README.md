@@ -104,16 +104,14 @@ curl -X POST http://localhost:8080/createTask \
 
 ```python
 async def main():
-token = await AsyncReCaptchaSolver.solve_recaptcha(
-url="https://example.com",
-site_key="your_site_key",
-proxy={
-"server": "proxy_address",
-"username": "proxy_user",
-"password": "proxy_pass"
-}
-)
-print(token)
+  token = await AsyncReCaptchaSolver.solve_recaptcha(
+  url="https://example.com",
+  site_key="your_site_key",
+  proxy={
+  "server": "proxy_address",
+  "username": "proxy_user",
+  "password": "proxy_pass"})
+  print(token)
 
 asyncio.run(main())
 ```
