@@ -9,6 +9,9 @@ from pydub import AudioSegment
 from patchright.async_api import async_playwright, Page, TimeoutError
 from quart import Quart, request, jsonify
 from logmagix import Logger, Loader
+from concurrent.futures import ThreadPoolExecutor
+from playwright.sync_api import sync_playwright
+import requests
 
 app = Quart(__name__)
 log = Logger()
@@ -19,7 +22,7 @@ class APIConfig:
     HOST: str = "0.0.0.0"
     PORT: int = 8080
     DEBUG: bool = False
-    MAX_CONCURRENT: int = 3
+    MAX_CONCURRENT: int = 10
     TIMEOUT: int = 120  # 2 minutes timeout
 
 @dataclass
@@ -35,6 +38,7 @@ class BrowserConfig:
         "--disable-renderer-backgrounding",
         "--disable-features=IsolateOrigins,site-per-process",
         "--disable-web-security",
+        "--disable-images",
     ])
     CONTEXT_OPTIONS: Dict = field(default_factory=lambda: {
         "locale": "en-US",
@@ -42,7 +46,10 @@ class BrowserConfig:
         "bypass_csp": True,
         "viewport": {"width": 1280, "height": 800},
         "device_scale_factor": 1,
-        "is_mobile": False
+        "is_mobile": False,
+        "offline": False,
+        "ignore_https_errors": True,
+        "service_workers": "block"
     })
 
     @classmethod
@@ -138,8 +145,9 @@ class ReCaptchaSolver:
         self.page = page
         self.debug = debug
         self.log = Logger()
+        has_proxy = bool(getattr(page, 'proxy', None))
+        self.page.set_default_timeout(20000 if has_proxy else 8000)
         self.audio_processor = AudioProcessor(debug)
-        self.page.set_default_timeout(8000)
 
     async def solve(self) -> str:
         """Solve reCAPTCHA challenge"""
@@ -265,171 +273,184 @@ class ReCaptchaSolver:
 
 class APIHandler:
     """Handles API requests"""
-    def __init__(self, max_concurrent: int = 3):
-        self.semaphore = asyncio.Semaphore(max_concurrent)
+    def __init__(self, max_concurrent: int = 10):
+        self.executor = ThreadPoolExecutor(max_workers=max_concurrent)
         self.log = Logger()
 
     async def solve_captcha(self, data: Dict) -> Dict[str, Union[bool, str, None]]:
-        """Solve single reCAPTCHA"""
-        loader = None
+        """Solve single reCAPTCHA using thread pool"""
         try:
-            async with self.semaphore:
-                loader = Loader(desc="Solving reCAPTCHA...", timeout=0.05)
-                loader.start()
-                start_time = time.time()
-
-                browser_config = BrowserConfig()
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(
-                        headless=True, 
-                        args=browser_config.CHROME_ARGS
-                    )
-                    
-                    context_options = browser_config.CONTEXT_OPTIONS.copy()
-                    if data.get('proxy'):
-                        context_options["proxy"] = data['proxy']
-                    
-                    context = await browser.new_context(**context_options)
-                    page = await context.new_page()
-                    
-                    try:
-                        await page.goto(data['url'])
-                        if data.get('site_key'):
-                            await page.set_content(ReCaptchaSolver.HTML_TEMPLATE.format(
-                                sitekey=data['site_key']
-                            ))
-                        
-                        solver = ReCaptchaSolver(page, data.get('debug', False))
-                        token = await solver.solve()
-                        
-                        end_time = time.time()
-                        if loader:
-                            loader.stop()
-                        
-                        Logger().message(
-                            "reCAPTCHA",
-                            f"Successfully solved captcha: {token[:60]}...",
-                            start=start_time,
-                            end=end_time
-                        )
-                        
-                        return {
-                            "success": True,
-                            "token": token,
-                            "error": None
-                        }
-                    finally:
-                        await context.close()
-                        await browser.close()
+            future = self.executor.submit(
+                self._sync_solve_captcha,
+                data
+            )
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, future.result, APIConfig.TIMEOUT
+            )
+            return result
         except Exception as e:
-            if loader:
-                try:
-                    loader.stop()
-                except:
-                    pass
             self.log.failure(f"Solving failed: {str(e)}")
             return {
-                "success": False,
-                "token": None,
-                "error": str(e)
+                "errorId": 1,
+                "errorCode": "ERROR_SOLVING",
+                "errorDescription": str(e)
             }
 
+    def _sync_solve_captcha(self, data: Dict) -> Dict:
+        """Synchronous captcha solving method for thread pool"""
+        loader = None
+        try:
+            loader = Loader(desc="Solving reCAPTCHA...", timeout=0.05)
+            loader.start()
+            start_time = time.time()
+
+            browser_config = BrowserConfig()
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=data.get('headless', True),
+                    args=browser_config.CHROME_ARGS
+                )
+                
+                context_options = browser_config.CONTEXT_OPTIONS.copy()
+                if data.get('proxy'):
+                    context_options["proxy"] = data['proxy']
+                
+                context = browser.new_context(**context_options)
+                page = context.new_page()
+                
+                try:
+                    page.goto(data['websiteURL'], wait_until="commit")
+                    if data.get('websiteKey'):
+                        page.set_content(ReCaptchaSolver.HTML_TEMPLATE.format(
+                            sitekey=data['websiteKey']
+                        ))
+                    
+                    solver = ReCaptchaSolver(page, data.get('debug', False))
+                    token = solver.solve()
+                    
+                    if loader:
+                        loader.stop()
+                    
+                    result = {
+                        "errorId": 0,
+                        "status": "ready",
+                        "solution": {
+                            "gRecaptchaResponse": token
+                        }
+                    }
+
+                    # Check score if requested
+                    if data.get('checkScore', False):
+                        try:
+                            response = requests.post('https://2captcha.com/api/v1/captcha-demo/recaptcha-enterprise/verify', 
+                                json={
+                                    'siteKey': data['websiteKey'],
+                                    'token': token,
+                                })
+                            score = response.json().get("riskAnalysis", {}).get("score")
+                            result["solution"]["score"] = score
+                            
+                            if data.get('debug', False):
+                                Logger().debug(f"Got score: {score}")
+                        except Exception as e:
+                            Logger().failure(f"Failed to check score: {e}")
+                            result["solution"]["score"] = "Unknown"
+
+                    return result
+
+                except Exception as e:
+                    if loader:
+                        loader.stop()
+                    if "rate limit" in str(e).lower():
+                        error_msg = "Rate limit reached, consider using or changing your proxy."
+                        if data.get('proxy'):
+                            error_msg += " Please use a different proxy."
+                        return {
+                            "errorId": 1,
+                            "errorCode": "ERROR_RATE_LIMIT",
+                            "errorDescription": error_msg
+                        }
+                    return {
+                        "errorId": 1,
+                        "errorCode": "ERROR_SOLVING",
+                        "errorDescription": str(e)
+                    }
+                finally:
+                    if data.get('wait'):
+                        time.sleep(data.get('wait'))
+                    context.close()
+                    browser.close()
+        except Exception as e:
+            if loader:
+                loader.stop()
+            return {
+                "errorId": 1,
+                "errorCode": "ERROR_SOLVING",
+                "errorDescription": str(e)
+            }
+
+# Initialize API handler
 api_handler = APIHandler(APIConfig.MAX_CONCURRENT)
 
-@app.route('/health', methods=['GET'])
-async def health_check():
-    """Health check endpoint"""
-    return jsonify({"status": "healthy"})
-
-@app.route('/solve', methods=['POST'])
-async def solve():
-    """Solve single reCAPTCHA endpoint"""
+@app.route('/createTask', methods=['POST'])
+async def create_task():
+    """Create and solve reCAPTCHA task"""
     try:
         data = await request.get_json()
+        task = data.get('task', {})
         
-        if not data.get('url') or not data.get('site_key'):
+        # Add default values
+        task.setdefault('headless', True)
+        task.setdefault('debug', False)
+        task.setdefault('checkScore', False)
+        task.setdefault('wait', None)
+        
+        if not task.get('websiteURL') or not task.get('websiteKey'):
             return jsonify({
-                "success": False,
-                "error": "Missing required fields: url and site_key"
+                "errorId": 1,
+                "errorCode": "ERROR_PARAMETER",
+                "errorDescription": "Missing required fields: websiteURL and websiteKey"
+            }), 400
+
+        if task.get('checkScore') and not task.get('websiteKey'):
+            return jsonify({
+                "errorId": 1,
+                "errorCode": "ERROR_PARAMETER",
+                "errorDescription": "Score checking requires a websiteKey"
             }), 400
 
         try:
-            result = await asyncio.wait_for(
-                api_handler.solve_captcha(data),
-                timeout=APIConfig.TIMEOUT
+            token = await AsyncReCaptchaSolver.solve_recaptcha(
+                url=task['websiteURL'],
+                proxy=task.get('proxy'),
+                site_key=task.get('websiteKey'),
+                debug=task.get('debug', False),
+                headless=task.get('headless', True),
+                wait=task.get('wait'),
+                check_score=task.get('checkScore', False)
             )
-            return jsonify(result)
+            
+            return jsonify({
+                "errorId": 0,
+                "status": "ready",
+                "solution": {
+                    "gRecaptchaResponse": token
+                }
+            })
+
         except asyncio.TimeoutError:
             return jsonify({
-                "success": False,
-                "error": "Request timed out"
+                "errorId": 1,
+                "errorCode": "ERROR_TIMEOUT",
+                "errorDescription": "Request timed out"
             }), 408
 
     except Exception as e:
         log.failure(f"API Error: {str(e)}")
         return jsonify({
-            "success": False,
-            "error": f"API Error: {str(e)}"
-        }), 500
-
-@app.route('/solve_batch', methods=['POST'])
-async def solve_batch():
-    """Solve multiple reCAPTCHAs endpoint"""
-    try:
-        data = await request.get_json()
-        tasks = data.get('tasks', [])
-        
-        if not tasks:
-            return jsonify({
-                "success": False,
-                "error": "No tasks provided"
-            }), 400
-
-        for task in tasks:
-            if not task.get('url') or not task.get('site_key'):
-                return jsonify({
-                    "success": False,
-                    "error": "Missing required fields in tasks"
-                }), 400
-
-        loader = Loader(desc="Solving Batch reCAPTCHA...", timeout=0.05)
-        loader.start()
-        start_time = time.time()
-
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*(api_handler.solve_captcha(task) for task in tasks)),
-                timeout=APIConfig.TIMEOUT
-            )
-            end_time = time.time()
-            loader.stop()
-            
-            Logger().message(
-                "reCAPTCHA Batch",
-                f"Successfully solved {len([r for r in results if r['success']])} out of {len(tasks)} captchas",
-                start=start_time,
-                end=end_time
-            )
-            
-            return jsonify({
-                "success": True,
-                "results": results
-            })
-        except asyncio.TimeoutError:
-            if loader:
-                loader.stop()
-            return jsonify({
-                "success": False,
-                "error": "Batch request timed out"
-            }), 408
-
-    except Exception as e:
-        if 'loader' in locals() and loader:
-            loader.stop()
-        log.failure(f"API Batch Error: {str(e)}")
-        return jsonify({
-            "success": False,
-            "error": f"API Batch Error: {str(e)}"
+            "errorId": 1,
+            "errorCode": "ERROR_UNKNOWN",
+            "errorDescription": f"API Error: {str(e)}"
         }), 500
 
 if __name__ == "__main__":

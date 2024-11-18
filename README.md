@@ -41,20 +41,63 @@ A Python-based solution for solving Google's reCAPTCHA v2 challenges efficiently
 
 ### 📝 Usage
 
+### 📝 Usage
+
 #### API Usage
 
 ```python
-curl -X POST http://localhost:8080/solve \
- -H "Content-Type: application/json" \
- -d '{
-"url": "https://example.com",
-"site_key": "your_site_key",
-"proxy": {
-"server": "proxy_address",
-"username": "proxy_user",
-"password": "proxy_pass"
+import requests
+
+# Example request
+url = "http://localhost:8080/createTask"
+data = {
+    "task": {
+        "type": "ReCaptchaV2TaskProxyless",
+        "websiteURL": "https://example.com",
+        "websiteKey": "6LcR_RsTAAAAAFJR_ZqPX8_k3_epxrq_x_vG9ZTi",
+        # Optional proxy configuration
+        "proxy": {
+            "server": "proxy.example.com:8080",
+            "username": "proxyuser",
+            "password": "proxypass"
+        }
+    }
 }
+
+response = requests.post(url, json=data)
+result = response.json()
+
+if result["errorId"] == 0:
+    token = result["solution"]["gRecaptchaResponse"]
+    print(f"Successfully solved! Token: {token[:50]}...")
+else:
+    print(f"Error: {result['errorDescription']}")
+```
+
+#### cURL Example
+
+```bash
+curl -X POST http://localhost:8080/createTask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task": {
+        "type": "ReCaptchaV2TaskProxyless",
+        "websiteURL": "https://example.com",
+        "websiteKey": "6LcR_RsTAAAAAFJR_ZqPX8_k3_epxrq_x_vG9ZTi"
+    }
 }'
+```
+
+#### Response Example
+
+```json
+{
+  "errorId": 0,
+  "status": "ready",
+  "solution": {
+    "gRecaptchaResponse": "03AGdBq24PBCbwiDRaS_MJ7..."
+  }
+}
 ```
 
 #### Async Usage

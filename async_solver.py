@@ -23,14 +23,27 @@ class BrowserConfig:
         "--disable-renderer-backgrounding",
         "--disable-features=IsolateOrigins,site-per-process",
         "--disable-web-security",
+        "--disable-images",
     ])
     CONTEXT_OPTIONS: Dict = field(default_factory=lambda: {
         "locale": "en-US",
         "java_script_enabled": True,
         "bypass_csp": True,
+        "viewport": {"width": 1280, "height": 800},
         "device_scale_factor": 1,
-        "is_mobile": False
+        "is_mobile": False,
+        "offline": False,
+        "ignore_https_errors": True,
+        "service_workers": "block"
     })
+
+    @classmethod
+    def get_chrome_args(cls) -> List[str]:
+        return cls.CHROME_ARGS
+
+    @classmethod
+    def get_context_options(cls) -> Dict:
+        return cls.CONTEXT_OPTIONS.copy()
 
 class AsyncAudioProcessor:
     """Handles audio processing and speech recognition asynchronously"""
@@ -142,35 +155,62 @@ class AsyncReCaptchaSolver:
         self.page = page
         self.debug = debug
         self.log = Logger()
+        has_proxy = bool(getattr(page, 'proxy', None))
+        self.page.set_default_timeout(20000 if has_proxy else 8000)
         self.audio_processor = AsyncAudioProcessor(debug)
-        self.page.set_default_timeout(8000)
 
     @classmethod
-    async def solve_recaptcha(cls, url: str, proxy: Optional[Dict] = None, debug: bool = False, site_key: Optional[str] = None) -> str:
+    async def solve_recaptcha(cls, url: str, proxy: Optional[Dict] = None, debug: bool = False, site_key: Optional[str] = None, headless: bool = True, wait: int = None, check_score: bool = False) -> str:
         """Class method to solve reCAPTCHA from URL or using a site key"""
+        if check_score and not site_key:
+            raise ValueError("Score checking requires a site key to be provided")
+        
         loader = Loader(desc="Solving reCAPTCHA...", timeout=0.05)
         loader.start()
         start_time = time.time()
 
         browser_config = BrowserConfig()
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=browser_config.CHROME_ARGS)
+            browser = await p.chromium.launch(headless=headless, args=browser_config.CHROME_ARGS)
             context_options = browser_config.CONTEXT_OPTIONS.copy()
             if proxy:
                 context_options["proxy"] = proxy
             context = await browser.new_context(**context_options)
             page = await context.new_page()
             try:
-                await page.goto(url)
+                await page.goto(url, wait_until="commit")
                 if site_key:
                     await page.set_content(cls.HTML_TEMPLATE.format(sitekey=site_key))
                 solver = cls(page, debug)
                 token = await solver._solve()
-                loader.stop()
                 end_time = time.time()
+                loader.stop()
+
+                if debug and check_score:
+                    Logger().debug(f"Checking score...")
+
+                if check_score:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post('https://2captcha.com/api/v1/captcha-demo/recaptcha-enterprise/verify', 
+                                json={
+                                    'siteKey': site_key,
+                                    'token': token,
+                                }) as response:
+                                result = await response.json()
+                                if debug:
+                                    Logger().debug(f"Got response for score: {result} {response.status}")
+                                score = result.get("riskAnalysis", {}).get("score")
+                    except Exception as e:
+                        Logger().failure(f"Failed to check score: {e}")
+                        score = "Unknown"
+                
+                if debug and check_score:
+                    Logger().debug(f"Got score: {score}")
+
                 Logger().message(
                     "reCAPTCHA",
-                    f"Successfully solved captcha: {token[:60]}...",
+                    f"Successfully solved captcha {token[:60]}..." if not check_score else f"Successfully solved captcha {token[:60]}... and score is {score}",
                     start=start_time,
                     end=end_time
                 )
@@ -184,6 +224,8 @@ class AsyncReCaptchaSolver:
                         raise Exception("Rate limit reached, consider using or changing your proxy.")
                 raise e
             finally:
+                if wait:
+                    await asyncio.sleep(wait)
                 await context.close()
                 await browser.close()
 
@@ -219,24 +261,30 @@ class AsyncReCaptchaSolver:
 
     async def _handle_challenge_iframe(self) -> Optional[Page]:
         """Handle the challenge iframe"""
+        has_proxy = bool(getattr(self.page, 'proxy', None))
         challenge_iframe = await self.page.wait_for_selector(
             "iframe[src*='google.com/recaptcha/api2/bframe'], iframe[src*='google.com/recaptcha/enterprise/bframe']",
-            timeout=3000,
+            timeout=10000 if has_proxy else 3000,
             strict=True
         )
         return await challenge_iframe.content_frame()
 
     async def _get_audio_challenge(self, challenge_iframe: Page) -> str:
         """Get audio challenge URL"""
+        has_proxy = bool(getattr(self.page, 'proxy', None))
         try:
             audio_button = await challenge_iframe.wait_for_selector(
                 "#recaptcha-audio-button",
                 state="visible",
-                timeout=2000,
+                timeout=5000 if has_proxy else 2000,
                 strict=True
             )
             await audio_button.click()
         except TimeoutError:
+            try:
+                Loader.stop()
+            except:
+                pass
             if await self._check_rate_limit(challenge_iframe):
                 if hasattr(self.page, 'proxy'):
                     raise Exception("Rate limit reached, consider using or changing your proxy. Please use a different proxy.")
@@ -244,15 +292,23 @@ class AsyncReCaptchaSolver:
 
         try:
             download_button = await challenge_iframe.wait_for_selector(
-                ".rc-audiochallenge-tdownload-link",
-                state="visible",
-                timeout=5000
+                ".rc-audiochallenge-tdownload-link", 
+                state="visible", 
+                timeout=12000 if has_proxy else 5000
             )
             audio_url = await download_button.get_attribute("href")
             if not audio_url:
+                try:
+                    Loader.stop()
+                except:
+                    pass
                 raise Exception("Could not get audio URL")
             return audio_url
         except TimeoutError:
+            try:
+                Loader.stop()
+            except:
+                pass
             if await self._check_rate_limit(challenge_iframe):
                 if hasattr(self.page, 'proxy'):
                     raise Exception("Rate limit reached, consider using or changing your proxy. Please use a different proxy.")
@@ -334,53 +390,15 @@ class AsyncReCaptchaSolver:
             return response ? response.value : null;
         }''')
 
-class AsyncCaptchaSolverPool:
-    """Manages a pool of async reCAPTCHA solving tasks"""
-    def __init__(self, max_concurrent: int = 3):
-        self.max_concurrent = max_concurrent
-        self.semaphore = asyncio.Semaphore(max_concurrent)
-        self.log = Logger()
-
-    async def solve_multiple(self, tasks: List[Dict]) -> List[Tuple[Dict, Optional[str], Optional[str]]]:
-        """
-        Solve multiple reCAPTCHA challenges concurrently
-        
-        Args:
-            tasks: List of dictionaries containing:
-                - url: str
-                - proxy: Optional[Dict]
-                - site_key: Optional[str]
-                - debug: Optional[bool]
-        
-        Returns:
-            List of tuples containing (task_dict, token, error_message)
-        """
-        async def solve_with_semaphore(task: Dict) -> Tuple[Dict, Optional[str], Optional[str]]:
-            async with self.semaphore:
-                try:
-                    token = await AsyncReCaptchaSolver.solve_recaptcha(
-                        url=task.get('url'),
-                        proxy=task.get('proxy'),
-                        site_key=task.get('site_key'),
-                        debug=task.get('debug', False)
-                    )
-                    return task, token, None
-                except Exception as e:
-                    return task, None, str(e)
-
-        return await asyncio.gather(*(solve_with_semaphore(task) for task in tasks))
-
 if __name__ == "__main__":
     async def main():
         try:
             token = await AsyncReCaptchaSolver.solve_recaptcha(
-                "https://yopmail.com/wm",
-                site_key="6LcG5v8SAAAAAOdAn2iqMEQTdVyX8t0w9T3cpdN2",
-                proxy = {
-                    "server": "http://p.webshare.io:80",
-                    "username": "username",
-                    "password": "password"
-                }
+                "https://2captcha.com/demo/recaptcha-v2-enterprise",
+                headless=False,
+                debug=True,
+                check_score=True,
+                site_key="6LfB5B8UAAAAAJgXZxP_d-9KzXaqFzYGpXzJ2sFP"
             )
             print(token)
         except Exception as e:

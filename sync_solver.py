@@ -10,6 +10,7 @@ from logmagix import Logger, Loader
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
+
 @dataclass
 class BrowserConfig:
     """Configuration for browser launch arguments"""
@@ -23,13 +24,17 @@ class BrowserConfig:
         "--disable-renderer-backgrounding",
         "--disable-features=IsolateOrigins,site-per-process",
         "--disable-web-security",
+        "--disable-images",
     ])
     CONTEXT_OPTIONS: Dict = field(default_factory=lambda: {
         "locale": "en-US",
         "java_script_enabled": True,
         "bypass_csp": True,
         "device_scale_factor": 1,
-        "is_mobile": False
+        "is_mobile": False,
+        "offline": False,
+        "ignore_https_errors": True,
+        "service_workers": "block"
     })
 
 class AudioProcessor:
@@ -104,68 +109,104 @@ class AudioProcessor:
 
 class ReCaptchaSolver:
     """Main class for solving reCAPTCHA challenges"""
-    HTML_TEMPLATE = """
-    <!DOCTYPE html>
-    <html>
-        <head>
-            <script src="https://www.google.com/recaptcha/api.js" async defer></script>
-        </head>
-        <body>
-            <div class="g-recaptcha" data-sitekey="{sitekey}"></div>
-        </body>
-    </html>
-    """
+    HTML_TEMPLATE =  """
+<!DOCTYPE html>
+<html>
+    <head>
+        <script src="https://www.google.com/recaptcha/api.js" async
+            defer></script>
+    </head>
+    <body>
+        <div
+            class="g-recaptcha"
+            data-sitekey="{sitekey}"></div>
+    </body>
+</html>
+"""
 
     def __init__(self, page: Page, debug: bool = False):
         self.page = page
         self.debug = debug
         self.log = Logger()
+        has_proxy = bool(getattr(page, 'proxy', None))
+        self.page.set_default_timeout(20000 if has_proxy else 8000)
         self.audio_processor = AudioProcessor(debug)
-        self.page.set_default_timeout(8000)
 
-    @classmethod
-    def solve_recaptcha(cls, url: str, proxy: Optional[Dict] = None, debug: bool = False, site_key: Optional[str] = None) -> str:
-        """Class method to solve reCAPTCHA from URL or using a site key"""
+    def solve_recaptcha(self, url: str, proxy: Optional[Dict] = None, debug: bool = False, site_key: Optional[str] = None, headless: bool = True, wait: int = None, check_score: bool = False) -> str:
+        """Solve reCAPTCHA from URL or using a site key"""
+        if check_score and not site_key:
+            raise ValueError("Score checking requires a site key to be provided")
+        
         loader = Loader(desc="Solving reCAPTCHA...", timeout=0.05)
         loader.start()
         start_time = time.time()
 
-        browser_config = BrowserConfig()
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=browser_config.CHROME_ARGS)
-            context_options = browser_config.CONTEXT_OPTIONS.copy()
-            if proxy:
-                context_options["proxy"] = proxy
-            context = browser.new_context(**context_options)
-            page = context.new_page()
-            try:
-                page.goto(url)
-                if site_key:
-                    page.set_content(cls.HTML_TEMPLATE.format(sitekey=site_key))
-                solver = cls(page, debug)
-                token = solver._solve()
-                loader.stop()
-                end_time = time.time()
-                Logger().message(
-                    "reCAPTCHA",
-                    f"Successfully solved captcha: {token[:60]}...",
-                    start=start_time,
-                    end=end_time
-                )
-                return token
-            except Exception as e:
-                loader.stop()
-                if "rate limit" in str(e).lower():
-                    if proxy:
-                        raise Exception("Rate limit reached, consider using or changing your proxy. Please use a different proxy.")
-                    else:
-                        raise Exception("Rate limit reached, consider using or changing your proxy.")
-                raise e
-            finally:
-                context.close()
-                browser.close()
+        try:
+            browser_config = BrowserConfig()
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=headless, args=browser_config.CHROME_ARGS)
+                context_options = browser_config.CONTEXT_OPTIONS.copy()
+                if proxy:
+                    context_options["proxy"] = proxy
+                context = browser.new_context(**context_options)
+                page = context.new_page()
 
-    def _solve(self) -> str:
+                try:
+                    page.goto(url, wait_until="commit")
+                    if site_key:
+                        page.set_content(self.HTML_TEMPLATE.format(sitekey=site_key))
+                    
+                    token = self._solve(page)
+                    end_time = time.time()
+                    loader.stop()
+
+                    if debug and check_score:
+                        Logger().debug(f"Checking score...")
+
+                    if check_score:
+                        try:
+                            response = requests.post('https://2captcha.com/api/v1/captcha-demo/recaptcha-enterprise/verify', 
+                                json={
+                                    'siteKey': site_key,
+                                    'token': token,
+                                })
+                            result = response.json()
+                            if debug:
+                                Logger().debug(f"Got response for score: {result}")
+                            score = result.get("riskAnalysis", {}).get("score")
+                        except Exception as e:
+                            Logger().failure(f"Failed to check score: {e}")
+                            score = "Unknown"
+                    
+                    if debug and check_score:
+                        Logger().debug(f"Got score: {score}")
+
+                    Logger().message(
+                        "reCAPTCHA",
+                        f"Successfully solved captcha {token[:60]}..." if not check_score else f"Successfully solved captcha {token[:60]}... and score is {score}",
+                        start=start_time,
+                        end=end_time
+                    )
+                    return token
+
+                except Exception as e:
+                    loader.stop()
+                    if "rate limit" in str(e).lower():
+                        if proxy:
+                            raise Exception("Rate limit reached, consider using or changing your proxy. Please use a different proxy.")
+                        else:
+                            raise Exception("Rate limit reached, consider using or changing your proxy.")
+                    raise e
+                finally:
+                    if wait:
+                        time.sleep(wait)
+                    context.close()
+                    browser.close()
+        except Exception as e:
+            loader.stop()
+            raise e
+
+    def _solve(self, page: Page) -> str:
         """Internal method to solve the reCAPTCHA"""
         try:
             iframe = self._handle_initial_iframe()
@@ -196,20 +237,22 @@ class ReCaptchaSolver:
 
     def _handle_challenge_iframe(self) -> Optional[Page]:
         """Handle the challenge iframe"""
+        has_proxy = bool(getattr(self.page, 'proxy', None))
         challenge_iframe = self.page.wait_for_selector(
             "iframe[src*='google.com/recaptcha/api2/bframe'], iframe[src*='google.com/recaptcha/enterprise/bframe']",
-            timeout=3000,
+            timeout=10000 if has_proxy else 3000,
             strict=True
         )
         return challenge_iframe.content_frame()
 
     def _get_audio_challenge(self, challenge_iframe: Page) -> str:
         """Get audio challenge URL"""
+        has_proxy = bool(getattr(self.page, 'proxy', None))
         try:
             audio_button = challenge_iframe.wait_for_selector(
                 "#recaptcha-audio-button",
                 state="visible",
-                timeout=2000,
+                timeout=5000 if has_proxy else 2000,
                 strict=True
             )
             audio_button.click()
@@ -227,7 +270,7 @@ class ReCaptchaSolver:
             download_button = challenge_iframe.wait_for_selector(
                 ".rc-audiochallenge-tdownload-link", 
                 state="visible", 
-                timeout=5000
+                timeout=12000 if has_proxy else 5000
             )
             audio_url = download_button.get_attribute("href")
             if not audio_url:
@@ -322,64 +365,15 @@ class ReCaptchaSolver:
             return response ? response.value : null;
         }''')
 
-class CaptchaSolverPool:
-    """Manages a pool of reCAPTCHA solving threads"""
-    def __init__(self, max_workers: int = 3):
-        self.max_workers = max_workers
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._lock = threading.Lock()
-        self.log = Logger()
-
-    def solve_multiple(self, tasks: List[Dict]) -> List[Tuple[Dict, Optional[str], Optional[str]]]:
-        """
-        Solve multiple reCAPTCHA challenges concurrently
-        
-        Args:
-            tasks: List of dictionaries containing:
-                - url: str
-                - proxy: Optional[Dict]
-                - site_key: Optional[str]
-                - debug: Optional[bool]
-        
-        Returns:
-            List of tuples containing (task_dict, token, error_message)
-        """
-        futures = []
-        results = []
-
-        for task in tasks:
-            future = self.executor.submit(
-                self._safe_solve,
-                url=task.get('url'),
-                proxy=task.get('proxy'),
-                site_key=task.get('site_key'),
-                debug=task.get('debug', False)
-            )
-            futures.append((task, future))
-
-        for task, future in futures:
-            try:
-                token = future.result(timeout=120)
-                results.append((task, token, None))
-            except Exception as e:
-                results.append((task, None, str(e)))
-
-        return results
-
-    def _safe_solve(self, url: str, proxy: Optional[Dict] = None, 
-                   site_key: Optional[str] = None, debug: bool = False) -> str:
-        """Thread-safe wrapper for solving individual reCAPTCHA"""
-        with self._lock:  # Ensure thread-safe logging
-            return ReCaptchaSolver.solve_recaptcha(url, proxy, debug, site_key)
-
-    def shutdown(self):
-        """Cleanup the thread pool"""
-        self.executor.shutdown(wait=True)
-
-
 if __name__ == "__main__":
     try:
-        token = ReCaptchaSolver.solve_recaptcha("https://yopmail.com/wm", site_key="6LcG5v8SAAAAAOdAn2iqMEQTdVyX8t0w9T3cpdN2")
+        token = ReCaptchaSolver.solve_recaptcha(
+            "https://2captcha.com/demo/recaptcha-v2-enterprise", 
+            headless=False, 
+            debug=True, 
+            check_score=True,
+            site_key="6LfB5B8UAAAAAJgXZxP_d-9KzXaqFzYGpXzJ2sFP"
+        ) 
         print(token)
     except Exception as e:
         Logger().failure(f"Failed to solve reCAPTCHA: {e}")
