@@ -1,8 +1,8 @@
 import asyncio
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict
 from logmagix import Logger, Loader
-from sync_solver import ReCaptchaSolver, CaptchaSolverPool
-from async_solver import AsyncReCaptchaSolver, AsyncCaptchaSolverPool
+from sync_solver import ReCaptchaSolver
+from async_solver import AsyncReCaptchaSolver
 from api_solver import app as api_app
 
 class ReCaptchaTester:
@@ -13,18 +13,16 @@ class ReCaptchaTester:
     def _get_user_input(self) -> tuple[str, str, Dict, str]:
         """Get user input for solver configuration"""
         self.log.info("Select solver mode:")
-        self.log.info("1. Sync Single Solver")
-        self.log.info("2. Sync Multiple Solver")
-        self.log.info("3. Async Single Solver")
-        self.log.info("4. Async Multiple Solver")
-        self.log.info("5. API Server")
+        self.log.info("1. Sync Solver")
+        self.log.info("2. Async Solver")
+        self.log.info("3. API Server")
         
-        mode = self.log.question("Enter mode (1-5): ")
-        while mode not in ['1', '2', '3', '4', '5']:
-            self.log.warning("Invalid mode. Please enter 1-5.")
-            mode = self.log.question("Enter mode (1-5): ")
+        mode = self.log.question("Enter mode (1-3): ")
+        while mode not in ['1', '2', '3']:
+            self.log.warning("Invalid mode. Please enter 1-3.")
+            mode = self.log.question("Enter mode (1-3): ")
 
-        if mode == '5':
+        if mode == '3':
             return 'api', '', None, ''
 
         url = self.log.question("URL (press enter for default 'https://yopmail.com/wm'): ").strip()
@@ -40,7 +38,6 @@ class ReCaptchaTester:
                 "server": self.log.question("Proxy server (e.g., http://proxy:port): ")
             }
             
-            # Make username and password optional
             username = self.log.question("Proxy username (optional, press enter to skip): ").strip()
             if username:
                 proxy["username"] = username
@@ -49,11 +46,9 @@ class ReCaptchaTester:
                     proxy["password"] = password
 
         return {
-            '1': 'sync_single',
-            '2': 'sync_multiple',
-            '3': 'async_single',
-            '4': 'async_multiple',
-            '5': 'api'
+            '1': 'sync',
+            '2': 'async',
+            '3': 'api'
         }[mode], url, proxy, site_key
 
     def run_sync_single(self, url: str, site_key: str, proxy: Optional[Dict] = None) -> str:
@@ -69,14 +64,6 @@ class ReCaptchaTester:
             self.log.failure(f"Sync solver failed: {e}")
             return None
 
-    def run_sync_multiple(self, tasks: List[Dict]) -> List[Tuple[Dict, Optional[str], Optional[str]]]:
-        """Run multiple synchronous solvers"""
-        try:
-            solver_pool = CaptchaSolverPool(max_workers=3)
-            return solver_pool.solve_multiple(tasks)
-        except Exception as e:
-            self.log.failure(f"Sync multiple solver failed: {e}")
-            return []
 
     async def run_async_single(self, url: str, site_key: str, proxy: Optional[Dict] = None) -> str:
         """Run single asynchronous solver"""
@@ -90,15 +77,6 @@ class ReCaptchaTester:
         except Exception as e:
             self.log.failure(f"Async solver failed: {e}")
             return None
-
-    async def run_async_multiple(self, tasks: List[Dict]) -> List[Tuple[Dict, Optional[str], Optional[str]]]:
-        """Run multiple asynchronous solvers"""
-        try:
-            solver_pool = AsyncCaptchaSolverPool(max_concurrent=3)
-            return await solver_pool.solve_multiple(tasks)
-        except Exception as e:
-            self.log.failure(f"Async multiple solver failed: {e}")
-            return []
 
     async def run_api_server(self):
         """Run the API server"""
@@ -127,42 +105,16 @@ class ReCaptchaTester:
                 await self.run_api_server()
                 return
 
-            if mode in ['sync_multiple', 'async_multiple']:
-                num_tasks = int(self.log.question("Number of tasks to run (1-10): "))
-                num_tasks = max(1, min(10, num_tasks))
-                
-                tasks = [
-                    {
-                        'url': url,
-                        'site_key': site_key,
-                        'proxy': proxy,
-                        'debug': True
-                    }
-                    for _ in range(num_tasks)
-                ]
+            token = None
+            if mode == 'sync':
+                token = self.run_sync_single(url, site_key, proxy)
+            else:
+                token = await self.run_async_single(url, site_key, proxy)
 
-                if mode == 'sync_multiple':
-                    results = self.run_sync_multiple(tasks)
-                else:
-                    results = await self.run_async_multiple(tasks)
-
-                for i, (task, token, error) in enumerate(results, 1):
-                    if token:
-                        self.log.success(f"Task {i}: Success - Token: {token[:50]}...")
-                    else:
-                        self.log.failure(f"Task {i}: Failed - Error: {error}")
-
-            else:  # Single solver modes
-                token = None
-                if mode == 'sync_single':
-                    token = self.run_sync_single(url, site_key, proxy)
-                else:
-                    token = await self.run_async_single(url, site_key, proxy)
-
-                if token:
-                    self.log.success(f"Token: {token[:50]}...")
-                else:
-                    self.log.failure("Failed to get token")
+            if token:
+                self.log.success(f"Token: {token[:50]}...")
+            else:
+                self.log.failure("Failed to get token")
 
         except KeyboardInterrupt:
             self.log.warning("\nOperation cancelled by user")
@@ -173,4 +125,4 @@ class ReCaptchaTester:
 
 if __name__ == "__main__":
     tester = ReCaptchaTester()
-    asyncio.run(tester.main()) 
+    asyncio.run(tester.main())
