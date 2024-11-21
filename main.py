@@ -54,7 +54,8 @@ class ReCaptchaTester:
     def run_sync_single(self, url: str, site_key: str, proxy: Optional[Dict] = None) -> str:
         """Run single synchronous solver"""
         try:
-            return ReCaptchaSolver.solve_recaptcha(
+            solver = ReCaptchaSolver()
+            return solver.solve_recaptcha(
                 url=url,
                 site_key=site_key,
                 proxy=proxy,

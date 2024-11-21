@@ -1,7 +1,9 @@
 aiohttp==3.10.10
+hypercorn==0.17.3
 logmagix==2.0.3
-patchright
+patchright==1.48.0.post0
+playwright==1.48.0
 pydub==0.25.1
-quart==0.19.8
+quart==0.19.9
 Requests==2.32.3
 SpeechRecognition==3.10.4
