@@ -420,7 +420,7 @@ async def create_task():
             }), 400
 
         try:
-            token = await AsyncReCaptchaSolver.solve_recaptcha(
+            token = await ReCaptchaSolver.solve(
                 url=task['websiteURL'],
                 proxy=task.get('proxy'),
                 site_key=task.get('websiteKey'),
