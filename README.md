@@ -41,8 +41,6 @@ A Python-based solution for solving Google's reCAPTCHA v2 challenges efficiently
 
 ### 📝 Usage
 
-### 📝 Usage
-
 #### API Usage
 
 ```python
