@@ -419,31 +419,8 @@ async def create_task():
                 "errorDescription": "Score checking requires a websiteKey"
             }), 400
 
-        try:
-            token = await ReCaptchaSolver.solve(
-                url=task['websiteURL'],
-                proxy=task.get('proxy'),
-                site_key=task.get('websiteKey'),
-                debug=task.get('debug', False),
-                headless=task.get('headless', True),
-                wait=task.get('wait'),
-                check_score=task.get('checkScore', False)
-            )
-            
-            return jsonify({
-                "errorId": 0,
-                "status": "ready",
-                "solution": {
-                    "gRecaptchaResponse": token
-                }
-            })
-
-        except asyncio.TimeoutError:
-            return jsonify({
-                "errorId": 1,
-                "errorCode": "ERROR_TIMEOUT",
-                "errorDescription": "Request timed out"
-            }), 408
+        result = await api_handler.solve_captcha(task)
+        return jsonify(result)
 
     except Exception as e:
         log.failure(f"API Error: {str(e)}")
