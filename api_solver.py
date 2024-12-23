@@ -6,11 +6,10 @@ import io
 import time
 import speech_recognition as sr
 from pydub import AudioSegment
-from patchright.async_api import async_playwright, Page, TimeoutError
 from quart import Quart, request, jsonify
 from logmagix import Logger, Loader
 from concurrent.futures import ThreadPoolExecutor
-from playwright.sync_api import sync_playwright
+from patchright.sync_api import sync_playwright, Page
 import requests
 
 app = Quart(__name__)
@@ -141,7 +140,7 @@ class ReCaptchaSolver:
     </html>
     """
 
-    def __init__(self, page: Page, debug: bool = False):
+    def __init__(self, page, debug: bool = False):
         self.page = page
         self.debug = debug
         self.log = Logger()
@@ -185,7 +184,7 @@ class ReCaptchaSolver:
         )
         return await challenge_iframe.content_frame()
 
-    async def _get_audio_challenge(self, frame: Page) -> str:
+    async def _get_audio_challenge(self, frame) -> str:
         """Get audio challenge URL"""
         try:
             audio_button = await frame.wait_for_selector("#recaptcha-audio-button", state="visible", timeout=2000)
@@ -201,14 +200,14 @@ class ReCaptchaSolver:
                 raise Exception("Rate limit reached")
             raise Exception(f"Audio challenge error: {str(e)}")
 
-    async def _submit_audio_solution(self, frame: Page, solution: str) -> None:
+    async def _submit_audio_solution(self, frame, solution: str) -> None:
         """Submit audio solution"""
         response_input = await frame.wait_for_selector("#audio-response", state="visible")
         await response_input.fill(solution)
         verify_button = await frame.wait_for_selector("#recaptcha-verify-button", state="visible")
         await verify_button.click()
 
-    async def _check_rate_limit(self, frame: Page) -> bool:
+    async def _check_rate_limit(self, frame) -> bool:
         """Check for rate limiting"""
         try:
             rate_limit_element = frame.locator(".rc-doscaptcha-header")
@@ -326,7 +325,12 @@ class APIHandler:
                         ))
                     
                     solver = ReCaptchaSolver(page, data.get('debug', False))
-                    token = solver.solve()
+                    
+    
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    token = loop.run_until_complete(solver.solve())
+                    loop.close()
                     
                     if loader:
                         loader.stop()
