@@ -81,17 +81,17 @@ class ReCaptchaTester:
 
     async def run_api_server(self):
         """Run the API server"""
-        self.log.info("Starting API server on http://localhost:8080")
+        self.log.info("Starting API server on http://localhost:5000")
         self.log.info("Available endpoints:")
         self.log.info("  POST /solve - Solve single reCAPTCHA")
-        self.log.info("  POST /solve_batch - Solve multiple reCAPTCHAs")
         self.log.info("  GET /health - Health check")
         
         try:
-            import hypercorn.asyncio
-            config = hypercorn.Config()
-            config.bind = ["localhost:8080"]
-            await hypercorn.asyncio.serve(api_app, config)
+            await api_app.run_task(
+                host="0.0.0.0",
+                port=5000,
+                debug=True
+            )
         except Exception as e:
             self.log.failure(f"API server failed: {e}")
 

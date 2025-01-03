@@ -7,3 +7,4 @@ pydub==0.25.1
 quart==0.19.9
 Requests==2.32.3
 SpeechRecognition==3.10.4
+standard-aifc

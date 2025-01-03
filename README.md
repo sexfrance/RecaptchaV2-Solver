@@ -39,9 +39,9 @@ A Python-based solution for solving Google's reCAPTCHA v2 challenges efficiently
 
 ---
 
-### 📝 Usage
+### 📝 API Usage
 
-#### API Usage
+#### Python Example
 
 ```python
 import requests
@@ -158,3 +158,4 @@ v0.0.1 ⋮ 11/12/2024
   <img src="https://img.shields.io/github/stars/sexfrance/RecaptchaV2-Solver.svg?style=for-the-badge&labelColor=black&color=f429ff&logo=IOTA"/>
   <img src="https://img.shields.io/github/languages/top/sexfrance/RecaptchaV2-Solver.svg?style=for-the-badge&labelColor=black&color=f429ff&logo=python"/>
 </p>
+````
