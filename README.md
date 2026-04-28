@@ -1,3 +1,41 @@
+<!-- SPONSOR-START -->
+---
+
+<div align="center">
+
+### 🌐 Need Proxies? Check out my services
+
+<a href="https://vaultproxies.com" target="_blank" rel="noopener noreferrer">
+  <img src="https://i.imgur.com/TF165pP.gif" alt="VaultProxies">
+</a>
+<p></p>
+
+<table>
+  <tr>
+    <th>Service</th>
+    <th>Pricing</th>
+    <th>Features</th>
+  </tr>
+  <tr>
+    <td><b><a href="https://vaultproxies.com" target="_blank" rel="noopener noreferrer">🔮 VaultProxies</a></b></td>
+    <td><code>$1.00/GB</code> residential</td>
+    <td>Residential · IPv6 · Residential Unlimited · Datacenter</td>
+  </tr>
+  <tr>
+    <td><b><a href="https://nullproxies.com" target="_blank" rel="noopener noreferrer">🌑 NullProxies</a></b></td>
+    <td><code>$0.75/GB</code> residential</td>
+    <td>Residential · Residential Unlimited · DC Unlimited · Mobile Proxies</td>
+  </tr>
+  <tr>
+    <td><b><a href="https://strikeproxy.net" target="_blank" rel="noopener noreferrer">⚡ StrikeProxy</a></b></td>
+    <td><code>$0.75/GB</code> residential</td>
+    <td>Residential · Residential Unlimited · DC Unlimited · Mobile Proxies</td>
+  </tr>
+</table>
+</div>
+
+<!-- SPONSOR-END -->
+
 <div align="center">
  
   <h2 align="center">RecaptchaV2 - Solver</h2>
